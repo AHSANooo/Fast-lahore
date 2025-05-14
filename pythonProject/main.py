@@ -8,7 +8,7 @@ from dateutil import parser
 def load_schedule():
     # find this script’s directory
     base = os.path.dirname(__file__)
-    fname = os.path.join(base, "final date sheet-Spring2025-STU-v1.3.xlsx")
+    fname = os.path.join(base, "final date sheet-Spring2025-STU-v1.4.xlsx")
     if not os.path.exists(fname):
         st.error(f"❗ Cannot find '{fname}'. Make sure it’s committed to your repo alongside app.py.")
         st.stop()
