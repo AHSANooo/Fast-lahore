@@ -6,9 +6,11 @@ from dateutil import parser
 
 @st.cache_data(show_spinner=False)
 def load_schedule():
-    fname = "final date sheet-Spring2025-STU-v1.3.xlsx"
+    # find this script’s directory
+    base = os.path.dirname(__file__)
+    fname = os.path.join(base, "final date sheet-Spring2025-STU-v1.3.xlsx")
     if not os.path.exists(fname):
-        st.error(f"❗ Cannot find '{fname}' in this folder.")
+        st.error(f"❗ Cannot find '{fname}'. Make sure it’s committed to your repo alongside app.py.")
         st.stop()
 
     raw = pd.read_excel(fname, header=None, engine="openpyxl")
