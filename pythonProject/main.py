@@ -1,62 +1,63 @@
 #!/usr/bin/env python3
+import os
 import sys
 import pandas as pd
+from dateutil import parser
 
 def load_schedule(path: str) -> pd.DataFrame:
     """
-    Reads the Excel or CSV and returns a DataFrame with columns:
-      ['Date', 'Time', 'Course Code', 'Course Name']
+    Load your Spring 2025 date sheet (row 3 zero-based index 2 header),
+    then melt morning/afternoon into one table with parsed dates.
     """
-    # 1) Read file
-    if path.lower().endswith(('.xls', '.xlsx')):
-        raw = pd.read_excel(path, header=None)
-    elif path.lower().endswith('.csv'):
-        raw = pd.read_csv(path, header=None)
-    else:
-        raise ValueError("Unsupported file type. Please provide .xlsx or .csv")
+    raw = pd.read_excel(path, header=None, engine="openpyxl")
 
-    # 2) Find header row (where “Day” appears)
-    header_row = raw[raw.apply(lambda row: row.astype(str).str.contains('Day', case=False).any(), axis=1)].index[0]
-    data = raw.iloc[header_row+1:].reset_index(drop=True)
+    HEADER = 2  # zero-based index for the row containing “Day | Date | ...”
+    # Read the two time-slot labels from that header row
+    morning_time   = str(raw.iat[HEADER, 3]).strip()
+    afternoon_time = str(raw.iat[HEADER, 5]).strip()
 
-    # 3) Assign column names based on what we know:
-    data = data.rename(columns={
-        0: 'Day',
-        1: 'Date',
-        2: 'Morning Code',
-        3: 'Morning Course',
-        4: 'Afternoon Code',
-        5: 'Afternoon Course'
-    })
+    # Extract only the columns we need under that header
+    block = raw.iloc[HEADER+1:, [1, 2, 3, 4, 5]].copy()
+    block.columns = [
+        "Date",
+        "Morning Code", "Morning Course",
+        "Afternoon Code", "Afternoon Course"
+    ]
+    block = block.dropna(subset=["Date"])
 
-    # 4) Melt into long form
-    morning = data[['Date', 'Morning Code', 'Morning Course']].dropna(subset=['Morning Code'])
+    # Use dateutil to parse any month format robustly
+    def parse_date(x):
+        # Convert Excel serials or strings to Python datetime
+        if isinstance(x, (int, float)):
+            # Excel serial date
+            return pd.to_datetime(x, unit='d', origin='1899-12-30')
+        else:
+            return parser.parse(str(x), dayfirst=True)
+    block["Date"] = block["Date"].apply(parse_date)
+
+    # Build “long” table of exams
+    morning = block[["Date", "Morning Code", "Morning Course"]].dropna(subset=["Morning Code"])
     morning = morning.rename(columns={
-        'Morning Code': 'Course Code',
-        'Morning Course': 'Course Name'
+        "Morning Code":   "Course_Code",
+        "Morning Course": "Course_Name"
     })
-    morning['Time'] = '09:00 – 12:00'
+    morning["Time"] = morning_time
 
-    afternoon = data[['Date', 'Afternoon Code', 'Afternoon Course']].dropna(subset=['Afternoon Code'])
+    afternoon = block[["Date", "Afternoon Code", "Afternoon Course"]].dropna(subset=["Afternoon Code"])
     afternoon = afternoon.rename(columns={
-        'Afternoon Code': 'Course Code',
-        'Afternoon Course': 'Course Name'
+        "Afternoon Code":   "Course_Code",
+        "Afternoon Course": "Course_Name"
     })
-    afternoon['Time'] = '13:00 – 16:00'
+    afternoon["Time"] = afternoon_time
 
-    long = pd.concat([morning, afternoon], ignore_index=True)
+    df = pd.concat([morning, afternoon], ignore_index=True)
+    df["Course_Code"] = df["Course_Code"].astype(str).str.strip().str.lower()
 
-    # 5) Normalize course codes (upper-case, trimmed)
-    long['Course Code'] = long['Course Code'].astype(str).str.strip().str.upper()
-
-    # 6) Parse dates for sorting
-    long['Date'] = pd.to_datetime(long['Date'], dayfirst=True)
-
-    return long[['Date', 'Time', 'Course Code', 'Course Name']].sort_values(['Date', 'Time'])
+    return df[["Date", "Time", "Course_Code", "Course_Name"]].sort_values(["Date", "Time"])
 
 
 def ask_int(prompt: str, min_val: int = 1) -> int:
-    """Prompt until the user enters a valid integer ≥ min_val."""
+    """Prompt until the user enters an integer ≥ min_val."""
     while True:
         try:
             n = int(input(prompt).strip())
@@ -67,13 +68,13 @@ def ask_int(prompt: str, min_val: int = 1) -> int:
             print(f" ➤ Please enter an integer ≥ {min_val}.")
 
 
-def ask_codes(n: int, valid_codes: set) -> list:
-    """Prompt the user n times for a course code, validating against valid_codes."""
+def ask_codes(n: int, valid: set) -> list:
+    """Prompt n times for course codes (case-insensitive)."""
     chosen = []
     for i in range(1, n+1):
         while True:
-            code = input(f"Enter course code #{i}: ").strip().upper()
-            if code in valid_codes:
+            code = input(f"Enter course code #{i}: ").strip().lower()
+            if code in valid:
                 chosen.append(code)
                 break
             else:
@@ -82,30 +83,31 @@ def ask_codes(n: int, valid_codes: set) -> list:
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python exam_lookup.py <path_to_schedule.xlsx|.csv>")
-        sys.exit(1)
-
-    path = sys.argv[1]
-    try:
-        schedule = load_schedule(path)
-    except Exception as e:
-        print("Error loading schedule:", e)
-        sys.exit(1)
-
     print("\n🏫  Fast Lahore Final‐Exam Lookup  –  Spring 2025\n")
-    total = ask_int("How many courses would you like to look up? ")
-    codes = ask_codes(total, set(schedule['Course Code']))
 
-    # Filter and display
-    result = schedule[schedule['Course Code'].isin(codes)]
+    fname = "final date sheet-Spring2025-STU-v1.3.xlsx"
+    if not os.path.exists(fname):
+        print(f"❗ Cannot find '{fname}' in this folder.")
+        sys.exit(1)
+
+    try:
+        schedule = load_schedule(fname)
+    except Exception as e:
+        print("❗ Failed to load schedule:", e)
+        sys.exit(1)
+
+    total = ask_int("How many courses would you like to look up? ")
+    codes = ask_codes(total, set(schedule["Course_Code"]))
+
+    # Filter & display
+    result = schedule[schedule["Course_Code"].isin(codes)].copy()
     if result.empty:
         print("\nNo matching exams found.")
     else:
-        # Format date back to d-M-YYYY
-        result['Date'] = result['Date'].dt.strftime('%d-%b-%Y')
+        result["Date"] = result["Date"].dt.strftime("%d-%b-%Y")
         print("\nHere’s your personalized exam schedule:\n")
-        print(result[['Date', 'Time', 'Course Name']].to_string(index=False))
+        print(result[["Date", "Time", "Course_Name"]].to_string(index=False))
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
